@@ -5,7 +5,8 @@ numpy==1.24.4
 scikit-image==0.19.3
 scipy==1.10.1
 click==8.1.5
-batchgenerators==0.23
+batchgenerators>=0.25
 blosc2==2.5.1
 acvl_utils==0.2
 torch==2.5.1
+nnunetv2==2.5.1

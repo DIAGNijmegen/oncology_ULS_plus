@@ -42,7 +42,7 @@ class Uls23(SegmentationAlgorithm):
 
     def load_model(self):
         start_model_load_time = time.time()
-        
+
         # Set up the nnUNetPredictor
         self.predictor = nnUNetPredictor(
             tile_step_size=0.5,
@@ -55,13 +55,13 @@ class Uls23(SegmentationAlgorithm):
         )
         # Initialize the network architecture, loads the checkpoint
         self.predictor.initialize_from_trained_model_folder(
-            "/opt/ml/model/Dataset601_Full_128_64/nnUNetTrainer_ULS_500_QuarterLR__nnUNetPlans_shallow__3d_fullres_resenc",
+            "/opt/ml/model/Dataset090_ULS23_Combined/nnUNetTrainer__nnUNetResEncUNetLPlans__3d_fullres",
             use_folds=("all"),
             checkpoint_name="checkpoint_best.pth",
         )
         end_model_load_time = time.time()
         print(f"Model loading runtime: {end_model_load_time - start_model_load_time}s")
-
+    
     def load_data(self):
         """
         1) Loads the .mha files containing the VOI stacks in the input directory
@@ -75,7 +75,7 @@ class Uls23(SegmentationAlgorithm):
         input_dir = Path("/input/images/stacked-3d-ct-lesion-volumes/")
 
         # Load the spacings per VOI
-        with open(Path("/input/stacked-3d-volumetric-spacings.json"), 'r') as json_file:
+        with open(Path("/input/stacked_spacing_sample.json"), 'r') as json_file:
             spacings = json.load(json_file)
 
         for input_file in input_dir.glob("*.mha"):
@@ -88,47 +88,16 @@ class Uls23(SegmentationAlgorithm):
             image_data = sitk.GetArrayFromImage(self.image_metadata)
             for i in range(int(image_data.shape[0] / self.z_size)):
                 voi = image_data[self.z_size * i:self.z_size * (i + 1), :, :]
+                # Note: spacings[i] contains the scan spacing for this VOI
 
-                # Convert the VOI back to a SimpleITK image
-                voi_image = sitk.GetImageFromArray(voi)
+                # Unstack the VOI's, perform optional preprocessing and save
+                # them to individual binary files for memory-efficient access
+                print(voi.shape)
+                voi = voi[32:96, 64:192, 64:192]
+                np.save(f"/tmp/voi_{i}.npy", np.array([voi])) # Add dummy batch dimension for nnUnet
 
-                # Calculate and set the metadata for the unstacked VOI
-                original_origin = self.image_metadata.GetOrigin()
-                original_spacing = self.image_metadata.GetSpacing()
-                new_origin = [
-                    original_origin[0],  # x-origin remains the same
-                    original_origin[1],  # y-origin remains the same
-                    original_origin[2] + i * self.z_size * original_spacing[2],  # Adjust z-origin for each VOI
-                ]
-                voi_image.SetOrigin(new_origin)
-                voi_image.SetSpacing(original_spacing)
-                voi_image.SetDirection(self.image_metadata.GetDirection())
-
-                # Define the cropping region in physical space
-                voi_shape = voi_image.GetSize()
-                start_index = [64, 64, 32]  # Start indices for cropping
-                crop_size = [128, 128, 64]  # Size of the cropped region
-
-                # Perform cropping using SimpleITK
-                voi_cropped = sitk.RegionOfInterest(voi_image, size=crop_size, index=start_index)
-
-                # Update the origin of the cropped VOI
-                cropped_origin = [
-                    voi_image.GetOrigin()[0] + start_index[0] * voi_image.GetSpacing()[0],
-                    voi_image.GetOrigin()[1] + start_index[1] * voi_image.GetSpacing()[1],
-                    voi_image.GetOrigin()[2] + start_index[2] * voi_image.GetSpacing()[2],
-                ]
-                voi_cropped.SetOrigin(cropped_origin)
-                voi_cropped.SetSpacing(voi_image.GetSpacing())
-                voi_cropped.SetDirection(voi_image.GetDirection())
-                
-                # Save the cropped VOI to a binary file
-                voi_cropped_array = sitk.GetArrayFromImage(voi_cropped)
-                np.save(f"/tmp/voi_{i}.npy", np.array([voi_cropped_array]))  # Add dummy batch dimension for nnUnet
-                
         end_load_time = time.time()
         print(f"Data pre-processing runtime: {end_load_time - start_load_time}s")
-
 
         return spacings
 
@@ -143,8 +112,8 @@ class Uls23(SegmentationAlgorithm):
         
         for i, voi_spacing in enumerate(spacings):
             # Load the 3D array from the binary file
-            voi = torch.from_numpy(np.load(f"/tmp/voi_{i}.npy"))
-            voi = voi.to(dtype=torch.float32)
+            voi = np.load(f"/tmp/voi_{i}.npy")
+            #voi = voi.to(dtype=np.float32)
 
             print(f'\nPredicting image of shape: {voi.shape}, spacing: {voi_spacing}')
             predictions.append(self.predictor.predict_single_npy_array(voi, {'spacing': voi_spacing}, None, None, False))
@@ -155,11 +124,13 @@ class Uls23(SegmentationAlgorithm):
 
     def postprocess(self, predictions):
         """
-        Runs post-processing and saves predictions for each VOI.
+        Runs post-processing and saves stacked predictions.
         :param predictions: list of numpy arrays containing the predicted lesion masks per VOI
         """
         start_postprocessing_time = time.time()
-
+        
+        # Run postprocessing code here, for the baseline we only remove any
+        # segmentation outputs not connected to the center lesion prediction
         for i, segmentation in enumerate(predictions):
             print(f"Post-processing prediction {i}")
             instance_mask, num_features = ndimage.label(segmentation)
@@ -171,28 +142,27 @@ class Uls23(SegmentationAlgorithm):
 
             # Pad segmentations to fit with original image size
             segmentation_pad = np.pad(segmentation, 
-                                    ((32, 32),   
-                                    (64, 64),
-                                    (64, 64)),
-                                    mode='constant', constant_values=0)
+                    ((32, 32),  
+                    (64, 64),   
+                    (64, 64)),
+                    mode='constant', constant_values=0)
 
-            # Convert padded segmentation and original segmentation back to a SimpleITK image
+            # Convert padded segmentation back to a SimpleITK image
             segmentation_image = sitk.GetImageFromArray(segmentation_pad)
-            segmentation_original = sitk.GetImageFromArray(segmentation)
-            
+
             # Update the origin to account for the padding
-            voi_origin = segmentation_original.GetOrigin() 
-            voi_spacing = segmentation_original.GetSpacing()
-            voi_direction = segmentation_original.GetDirection()
-            
+            original_origin = self.image_metadata.GetOrigin()
+            original_spacing = self.image_metadata.GetSpacing()
             new_origin = [
-                voi_origin[0] - 32 * voi_spacing[0],  # Adjust for z padding
-                voi_origin[1] - 64 * voi_spacing[1],  # Adjust for x padding
-                voi_origin[2] - 64 * voi_spacing[2],  # Adjust for y padding
+                original_origin[0] - 64 * original_spacing[0],  # Adjust for x padding
+                original_origin[1] - 64 * original_spacing[1],  # Adjust for y padding
+                original_origin[2] - 32 * original_spacing[2],  # Adjust for z padding
             ]
             segmentation_image.SetOrigin(new_origin)
-            segmentation_image.SetDirection(voi_direction)
-            segmentation_image.SetSpacing(voi_spacing)
+
+            # Copy the direction and spacing from the original metadata
+            segmentation_image.SetDirection(self.image_metadata.GetDirection())
+            segmentation_image.SetSpacing(self.image_metadata.GetSpacing())
 
             # Save the updated segmentation image
             predictions[i] = sitk.GetArrayFromImage(segmentation_image)
@@ -201,8 +171,8 @@ class Uls23(SegmentationAlgorithm):
 
         # Create mask image and copy over metadata
         mask = sitk.GetImageFromArray(predictions)
-        mask.CopyInformation(self.image_metadata) 
-        
+        mask.CopyInformation(self.image_metadata)
+
         sitk.WriteImage(mask, f"/output/images/ct-binary-uls/{self.id.name}")
         print("Output dir contents:", os.listdir("/output/images/ct-binary-uls/"))
         print("Output batched image shape:", predictions.shape)

@@ -28,7 +28,7 @@ RUN python3.9 -m pip install --no-cache-dir -r /tmp/requirements.txt -f https://
 RUN git config --global advice.detachedHead false && \
     git clone --no-checkout https://github.com/MIC-DKFZ/nnUNet.git /opt/algorithm/nnunet/ && \
     cd /opt/algorithm/nnunet/ && \
-    git checkout 947eafbb9adb5eb06b9171330b4688e006e6f301
+    git checkout v2.5.1
 
 # Install a few dependencies that are not automatically installed
 RUN pip3 install \
@@ -60,7 +60,7 @@ COPY --chown=user:user export2onnx.py /opt/app/
 COPY --chown=user:user ./architecture/extensions/nnunetv2/ /opt/algorithm/nnunet/nnunetv2/
 
 # Copy model checkpoint to docker (uncomment if you put the model weights directly in this repo)
-#COPY --chown=user:user ./architecture/nnUNet_results/ /opt/ml/model/
+#COPY --chown=user:user ./architecture/nnUNet_results/ /opt/algorithm/nnunet/nnUNet_results/
 
 # Copy container testing data to docker (uncomment if you want to see if the model works and put a test image and spacing in this repo)
 #COPY --chown=user:user /architecture/input/ /input/
