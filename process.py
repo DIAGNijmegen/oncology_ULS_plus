@@ -55,7 +55,7 @@ class Uls23(SegmentationAlgorithm):
         )
         # Initialize the network architecture, loads the checkpoint
         self.predictor.initialize_from_trained_model_folder(
-            "/opt/ml/model/Dataset090_ULS23_Combined/nnUNetTrainer__nnUNetResEncUNetLPlans__3d_fullres",
+            "/opt/ml/model/nnUNet_results/Dataset090_ULS23_Combined/nnUNetTrainer__nnUNetResEncUNetLPlans__3d_fullres",
             use_folds=("all"),
             checkpoint_name="checkpoint_best.pth",
         )
